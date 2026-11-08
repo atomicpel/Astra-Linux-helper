@@ -1,0 +1,59 @@
+#!/bin/bash
+# Astra Linux Helper — запуск. При первом запуске сам доставит python3-tk
+# из штатных репозиториев Astra; если не получится — запустит проверки в терминале.
+#   astra-helper           — графическое окно
+#   astra-helper --text    — проверки в терминале (без графики)
+
+DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+GUI="$DIR/astra_helper_gui.py"
+DOC="$DIR/astra-doctor.sh"
+
+text_mode() {
+  shift_args=("$@")
+  if [ "$(id -u)" -eq 0 ]; then bash "$DOC" "${shift_args[@]}"; else sudo bash "$DOC" "${shift_args[@]}"; fi
+  echo; read -r -p "Нажмите Enter, чтобы закрыть..." _
+}
+
+in_terminal() { # перезапуск себя в терминале, если запущены из меню без консоли
+  for t in fly-term x-terminal-emulator konsole xterm; do
+    command -v "$t" >/dev/null 2>&1 && exec "$t" -e "$DIR/astra-helper" "$@"
+  done
+  return 1
+}
+
+has_tk() { python3 -c 'import tkinter' >/dev/null 2>&1; }
+
+install_tk() {
+  echo "Первый запуск: устанавливаю python3-tk из репозитория Astra..."
+  local SU=""; [ "$(id -u)" -ne 0 ] && SU="sudo"
+  $SU apt-get install -y python3-tk && return 0
+  echo "Пробую обновить список пакетов и повторить..."
+  $SU apt-get update >/dev/null 2>&1
+  $SU apt-get install -y python3-tk
+}
+
+if [ "$1" = "--text" ]; then shift; text_mode "$@"; exit; fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+  [ -t 0 ] || in_terminal --text
+  echo "python3 не найден — запускаю проверки в терминале."
+  text_mode; exit
+fi
+
+if ! has_tk; then
+  if [ ! -t 0 ]; then in_terminal || { echo "Нет терминала"; exit 1; }; fi
+  install_tk
+  if ! has_tk; then
+    echo
+    echo "Не удалось установить python3-tk (нет доступного репозитория Astra или диска)."
+    echo "Подключите установочный диск Astra (sudo apt-cdrom add) и запустите снова."
+    echo "А пока — проверки в текстовом режиме:"
+    echo
+    text_mode; exit
+  fi
+  # tkinter появился — запускаем окно отдельно от терминала
+  nohup python3 "$GUI" >/dev/null 2>&1 &
+  exit 0
+fi
+
+exec python3 "$GUI"
