@@ -8,11 +8,12 @@ DST=/opt/astra-helper
 
 echo "== Копирую файлы в $DST"
 mkdir -p "$DST"
-cp -f "$SRC/astra-helper" "$SRC/astra_helper_gui.py" "$SRC/astra-doctor.sh" "$SRC/uninstall.sh" "$DST/"
-[ -f "$SRC/astra-helper.svg" ] && cp -f "$SRC/astra-helper.svg" "$DST/"
-chmod 755 "$DST/astra-helper" "$DST/astra-doctor.sh" "$DST/uninstall.sh"
-chmod 644 "$DST/astra_helper_gui.py"
+cp -f "$SRC/astra-helper" "$SRC/astra-fixer" "$SRC/astra_helper_gui.py" "$SRC/astra_fixer_gui.py" "$SRC/astra-doctor.sh" "$SRC/uninstall.sh" "$DST/"
+cp -f "$SRC"/*.svg "$DST/" 2>/dev/null || true
+chmod 755 "$DST/astra-helper" "$DST/astra-fixer" "$DST/astra-doctor.sh" "$DST/uninstall.sh"
+chmod 644 "$DST/astra_helper_gui.py" "$DST/astra_fixer_gui.py"
 ln -sf "$DST/astra-helper" /usr/local/bin/astra-helper
+ln -sf "$DST/astra-fixer" /usr/local/bin/astra-fixer
 
 echo "== Зависимости"
 set +e
@@ -41,8 +42,20 @@ Icon=$( [ -f "$DST/astra-helper.svg" ] && echo "$DST/astra-helper.svg" || echo u
 Terminal=false
 Categories=System;Settings;
 EOF
-chmod 644 /usr/share/applications/astra-helper.desktop
+cat > /usr/share/applications/astra-fixer.desktop <<EOF
+[Desktop Entry]
+Type=Application
+Name=Astra Fixer
+Name[ru]=Astra Fixer — исправление
+Comment=Исправление типичных проблем Astra Linux готовыми командами
+Exec=$DST/astra-fixer
+Icon=$DST/astra-fixer.svg
+Terminal=false
+Categories=System;Settings;
+EOF
+chmod 644 /usr/share/applications/astra-helper.desktop /usr/share/applications/astra-fixer.desktop
 
 echo
-echo "Готово. Запуск: меню «Пуск» → Системные → Astra Helper, или в терминале:  astra-helper"
+echo "Готово. Меню «Пуск» → Системные → Astra Helper (диагностика) и Astra Fixer (исправление)"
+echo "В терминале:  astra-helper  /  astra-fixer   (без графики: --text)"
 echo "Удаление:  sudo $DST/uninstall.sh"
