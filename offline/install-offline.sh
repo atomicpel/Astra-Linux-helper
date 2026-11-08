@@ -44,5 +44,5 @@ echo "== Ставлю $DEB"
 dpkg -i "$DEB" || { echo "!! Ошибка установки astra-helper"; exit 1; }
 
 echo
-python3 -c 'import tkinter' >/dev/null 2>&1 && echo "Готово. Запуск: Пуск → Системные → Astra Helper, или  astra-helper" \
-  || echo "Установлено без графики. Запуск проверок:  astra-helper --text"
+python3 -c 'import tkinter' >/dev/null 2>&1 && echo "Готово. Пуск → Системные → Astra Helper (диагностика) и Astra Fixer (исправление)" \
+  || echo "Установлено без графики. Проверка:  astra-helper --text   исправление:  astra-fixer --text"

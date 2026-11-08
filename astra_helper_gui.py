@@ -21,7 +21,7 @@ except ImportError:
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "astra-doctor.sh")
-VERSION = "1.0"
+VERSION = "1.1"
 
 MODULES = [
     ("sys", "Диск, память, службы, время"),
@@ -152,15 +152,9 @@ class App:
         if not only:
             messagebox.showinfo("Нечего проверять", "Отметьте хотя бы один раздел.")
             return
-        pw = None
-        if os.geteuid() != 0:
-            pw = simpledialog.askstring(
-                "Нужны права администратора",
-                "Проверкам нужны права root (чтение системных настроек).\n"
-                "Введите пароль sudo для пользователя %s:" % os.environ.get("USER", ""),
-                show="*", parent=self.root)
-            if pw is None:
-                return
+        ok, pw = self.ask_password()
+        if not ok:
+            return
         self.running = True
         self.btn.configure(state="disabled")
         self.save_btn.configure(state="disabled")
@@ -177,7 +171,24 @@ class App:
             args += ["--domain", self.domain.get().strip()]
         if self.user.get().strip():
             args += ["--user", self.user.get().strip()]
+        args += self.extra_args
         threading.Thread(target=self.worker, args=(pw, args), daemon=True).start()
+
+    extra_args = []
+
+    def ask_password(self):
+        """(ok, пароль): пароль None — уже root; ok False — пользователь отменил."""
+        if os.geteuid() == 0:
+            return True, None
+        pw = simpledialog.askstring(
+            "Нужны права администратора",
+            "Нужны права root (чтение и изменение системных настроек).\n"
+            "Введите пароль sudo для пользователя %s:" % os.environ.get("USER", ""),
+            show="*", parent=self.root)
+        return (pw is not None), pw
+
+    def on_event(self, kind, val):
+        pass
 
     def worker(self, pw, args):
         try:
@@ -208,8 +219,10 @@ class App:
                 kind, val = self.q.get_nowait()
                 if kind == "line":
                     self.handle(val)
-                else:
+                elif kind == "done":
                     self.finish(val)
+                else:
+                    self.on_event(kind, val)
         except queue.Empty:
             pass
         self.root.after(100, self.poll)

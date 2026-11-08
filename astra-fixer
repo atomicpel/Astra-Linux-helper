@@ -1,0 +1,3 @@
+#!/bin/bash
+# Astra Fixer — исправление найденных проблем (запускается через astra-helper)
+exec env ASTRA_MODE=fixer bash "$(dirname "$(readlink -f "$0")")/astra-helper" "$@"

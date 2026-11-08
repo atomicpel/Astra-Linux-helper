@@ -3,14 +3,18 @@
 # НИЧЕГО НЕ МЕНЯЕТ в системе: только проверяет и подсказывает, что исправить.
 #
 # Запуск:  sudo bash astra-doctor.sh [--only sys,apt,sec,gui,net,print,sound,ad] [--domain домен] [--user пользователь]
+#          --fix   — после проверки по очереди предложить выполнить команды исправления (y/N)
+#          --cmds  — выводить команды исправления в машинном виде (для Astra Fixer)
 # Отчёт:   /tmp/astra-doctor-ДАТА.log
 
-ONLY=""; DOMAIN=""; TESTUSER=""
+ONLY=""; DOMAIN=""; TESTUSER=""; FIXMODE=0; CMDS_ON=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --only)   ONLY="$2";     shift ;;
     --domain) DOMAIN="$2";   shift ;;
     --user)   TESTUSER="$2"; shift ;;
+    --fix)    FIXMODE=1 ;;
+    --cmds)   CMDS_ON=1 ;;
   esac
   shift
 done
@@ -30,6 +34,16 @@ warn()   { echo -e "  ${Y}[ВНИМАНИЕ]${N} $1"; fixout "$2"; W=$((W+1)); S
 info()   { echo "     $1"; }
 sysi()   { echo "  [SYS] $1"; }
 hdr()    { echo; echo -e "${B}== $1 ==${N}"; }
+FX_LVL=(); FX_TITLE=(); FX_CMD=()
+cmd() {  # cmd уровень "что сделать" "команда"   (уровень: safe | careful | danger)
+  FX_LVL+=("$1"); FX_TITLE+=("$2"); FX_CMD+=("$3")
+  [ "$CMDS_ON" = 1 ] && echo "  [CMD] $1|c${#FX_CMD[@]}|$2|$(printf '%s' "$3" | base64 -w0)"
+  return 0
+}
+srcsed() { # команда: закомментировать deb-строки по шаблону во всех .list
+  printf "for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do [ -f \"\$f\" ] && sed -i.bak-astra-helper -E '\\#^[[:space:]]*deb.*(%s)#s/^/# /' \"\$f\"; done; apt-get update" "$1"
+}
+SSSCLR_CMD="systemctl stop sssd; rm -f /var/lib/sss/db/* /var/lib/sss/mc/* /var/lib/sss/pubconf/kdcinfo.*; systemctl start sssd"
 want()   { [ -z "$ONLY" ] || [[ ",$ONLY," == *",$1,"* ]]; }
 have()   { command -v "$1" >/dev/null 2>&1; }
 port()   { timeout 3 bash -c "</dev/tcp/$1/$2" 2>/dev/null; }
@@ -88,6 +102,7 @@ while read -r mp pct; do
   if   [ "$p" -ge 95 ]; then bad "Диск $mp заполнен на $pct" "$fx"
   elif [ "$p" -ge 85 ]; then warn "Диск $mp заполнен на $pct" "$fx"
   else ok "Диск $mp: занято $pct"; fi
+  [ "$p" -ge 85 ] && [ "$mp" != "/boot" ] && cmd safe "Очистить кэш пакетов и старые журналы" "apt-get clean; journalctl --vacuum-size=200M"
 done < <(df -P / /boot /var /home /tmp 2>/dev/null | awk 'NR>1{print $6, $5}' | sort -u)
 while read -r mp pct; do
   p=${pct%\%}; [ "$p" = "-" ] && continue
@@ -112,13 +127,15 @@ if [ -n "$avail" ] && [ "$avail" -lt 300 ]; then
   warn "Мало свободной памяти: $avail МБ из $total МБ" "Кто занимает память:  ps aux --sort=-%mem | head -15"
 else ok "Память: свободно $avail МБ из $total МБ, swap $swap МБ"; fi
 [ "${swap:-0}" -eq 0 ] && [ "${total:-0}" -lt 4096 ] && warn "Нет файла/раздела подкачки при ОЗУ меньше 4 ГБ — программы будут закрываться при нехватке памяти" \
-  "Создать swap-файл на 2 ГБ:\n  sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile\n  sudo mkswap /swapfile && sudo swapon /swapfile\n  и добавить в /etc/fstab:  /swapfile none swap sw 0 0"
+  "Создать swap-файл на 2 ГБ:\n  sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile\n  sudo mkswap /swapfile && sudo swapon /swapfile\n  и добавить в /etc/fstab:  /swapfile none swap sw 0 0" \
+  && cmd careful "Создать файл подкачки 2 ГБ (/swapfile)" "if [ -e /swapfile ]; then echo '/swapfile уже есть'; exit 1; fi; fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048; chmod 600 /swapfile; mkswap /swapfile && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab"
 
-[ -d "/lib/modules/$(uname -r)" ] || bad "Модули текущего ядра $(uname -r) удалены — система обновилась, но не перезагружена (не работают флешки, звук, часть сети)" "Перезагрузите компьютер:  sudo reboot"
-[ -f /var/run/reboot-required ] && warn "После обновления требуется перезагрузка" "sudo reboot"
+[ -d "/lib/modules/$(uname -r)" ] || { bad "Модули текущего ядра $(uname -r) удалены — система обновилась, но не перезагружена (не работают флешки, звук, часть сети)" "Перезагрузите компьютер:  sudo reboot"; cmd careful "Перезагрузить компьютер" "systemctl reboot"; }
+[ -f /var/run/reboot-required ] && { warn "После обновления требуется перезагрузка" "sudo reboot"; cmd careful "Перезагрузить компьютер" "systemctl reboot"; }
 
 for u in $(systemctl --failed --no-legend 2>/dev/null | grep -oE '[^ ]+\.(service|mount|socket|timer|path|swap|automount)'); do
   warn "Служба $u завершилась с ошибкой" "systemctl status $u\njournalctl -u $u -b --no-pager | tail -30"
+  cmd careful "Перезапустить службу $u" "systemctl reset-failed $u; systemctl restart $u"
 done
 systemctl --failed --no-legend 2>/dev/null | grep -q . || ok "Все службы systemd работают"
 
@@ -134,6 +151,8 @@ else
     tfx="Включите синхронизацию:  sudo timedatectl set-ntp true\nСервер времени: /etc/systemd/timesyncd.conf (NTP=<сервер>) или /etc/chrony/chrony.conf\nРазово:  sudo ntpdate <сервер>  (если установлен)"
   fi
   warn "Время не синхронизируется по NTP — из-за расхождения ломается вход в домен, сертификаты и сайты" "$tfx"
+  if [ "$V" = 1.6 ] && have ntpd; then cmd safe "Включить и перезапустить службу ntp" "systemctl enable ntp; systemctl restart ntp"
+  else cmd safe "Включить синхронизацию времени" "timedatectl set-ntp true"; fi
 fi
 
 n=$(journalctl -p 3 -b --no-pager -q 2>/dev/null | wc -l)
@@ -148,6 +167,7 @@ if want apt; then
 hdr "2. Пакеты и репозитории"
 if [ -n "$(dpkg --audit 2>/dev/null)" ]; then
   bad "Установка пакетов была прервана — dpkg в неконсистентном состоянии" "sudo dpkg --configure -a\nsudo apt-get -f install"
+  cmd careful "Доустановить прерванные пакеты" "dpkg --configure -a && apt-get -f install -y"
 else ok "Прерванных установок нет"; fi
 
 if have fuser && fuser /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then
@@ -158,6 +178,7 @@ fi
 if out=$(apt-get check -q 2>&1); then ok "Зависимости пакетов в порядке"
 else
   bad "Нарушены зависимости пакетов" "sudo apt-get -f install\nПодробности:  sudo apt-get check"
+  cmd careful "Исправить зависимости пакетов" "apt-get -f install -y"
   echo "$out" | tail -3 | sed 's/^/       /'
 fi
 
@@ -180,23 +201,28 @@ else
   fi
   fr=$(echo "$ALLSRC" | grep -iE 'debian\.org|ubuntu|linuxmint|/debian/|/debian ')
   [ -n "$fr" ] && bad "Подключены репозитории Debian/Ubuntu — главная причина поломок Astra (конфликты версий, слетают fly и средства защиты)" \
-    "Закомментируйте (#) в /etc/apt/sources.list(.d) строки:\n$fr\nзатем:  sudo apt-get update"
+    "Закомментируйте (#) в /etc/apt/sources.list(.d) строки:\n$fr\nзатем:  sudo apt-get update" \
+    && cmd careful "Закомментировать репозитории Debian/Ubuntu (копии файлов .bak-astra-helper)" "$(srcsed 'debian\.org|ubuntu|linuxmint|/debian/|/debian ')"
   case "$V" in
-    1.6) wr=$(echo "$ALLSRC" | grep -E '1\.7_|1\.8_|/1\.7/|/1\.8/') ;;
-    1.7) wr=$(echo "$ALLSRC" | grep -E '1\.8_|/1\.8/|smolensk/1\.6|/1\.6/') ;;
-    1.8) wr=$(echo "$ALLSRC" | grep -E '1\.7_|/1\.7/|/1\.6/|smolensk') ;;
-    *)   wr="" ;;
+    1.6) WRPAT='1\.7_|1\.8_|/1\.7/|/1\.8/' ;;
+    1.7) WRPAT='1\.8_|/1\.8/|smolensk/1\.6|/1\.6/' ;;
+    1.8) WRPAT='1\.7_|/1\.7/|/1\.6/|smolensk' ;;
+    *)   WRPAT='' ;;
   esac
+  wr=""; [ -n "$WRPAT" ] && wr=$(echo "$ALLSRC" | grep -E "$WRPAT")
   [ -n "$wr" ] && bad "Подключён репозиторий от другой версии Astra (у вас $V)" \
-    "Замените на репозиторий своей версии или закомментируйте строки:\n$wr"
+    "Замените на репозиторий своей версии или закомментируйте строки:\n$wr" \
+    && cmd careful "Закомментировать репозитории чужой версии Astra" "$(srcsed "$WRPAT")"
   echo "$ALLSRC" | grep -qiE 'orel|/common/' && warn "Подключён репозиторий Astra Common Edition (orel) — на SE его смешивать нельзя" \
-    "Закомментируйте строки с orel/common в /etc/apt/sources.list(.d)"
+    "Закомментируйте строки с orel/common в /etc/apt/sources.list(.d)" \
+    && cmd careful "Закомментировать репозитории Astra CE (orel)" "$(srcsed 'orel|/common/')"
   if [ "$V" = 1.6 ] && echo "$ALLSRC" | grep -q 'https://' && ! dpkg -s apt-transport-https >/dev/null 2>&1; then
     bad "Репозиторий по https, а пакет apt-transport-https не установлен (в 1.6 он нужен отдельно) — apt update падает" \
         "Установите с диска:  sudo apt-get install apt-transport-https\nили временно замените https:// на http:// в sources.list"
+    cmd careful "Заменить https:// на http:// в репозиториях" "for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do [ -f \"\$f\" ] && sed -i.bak-astra-helper 's#https://#http://#g' \"\$f\"; done; apt-get update"
   fi
 fi
-ls /var/lib/apt/lists/*Packages >/dev/null 2>&1 || warn "Списки пакетов пусты — apt update не выполнялся или завершался ошибкой" "sudo apt-get update   и посмотрите, какая строка репозитория даёт ошибку"
+ls /var/lib/apt/lists/*Packages >/dev/null 2>&1 || { warn "Списки пакетов пусты — apt update не выполнялся или завершался ошибкой" "sudo apt-get update   и посмотрите, какая строка репозитория даёт ошибку"; cmd safe "Обновить списки пакетов" "apt-get update"; }
 h=$(apt-mark showhold 2>/dev/null | tr '\n' ' ')
 [ -n "$h" ] && info "Заморожены (hold) пакеты: $h"
 fi
@@ -225,7 +251,8 @@ while IFS='|' read -r tool desc fix; do
   found=1
   lock_state "$tool"; st=$?
   case $st in
-    0) warn "$desc ($tool включён)" "Если это мешает работе и разрешено политикой ИБ:\n$fix" ;;
+    0) warn "$desc ($tool включён)" "Если это мешает работе и разрешено политикой ИБ:\n$fix"
+       cmd danger "Отключить $tool (только по решению ИБ)" "$tool disable" ;;
     1) ok "$tool выключен" ;;
     *) info "$tool: состояние не определено ($($tool status 2>&1 | head -1))" ;;
   esac
@@ -256,20 +283,24 @@ if [ -n "$TESTUSER" ] && have pdpl-user; then
 fi
 
 lk=""; lfx=""
+addlock() { # пользователь(число) команда
+  lk="$lk $1"; cmd safe "Разблокировать пользователя ${1%%(*}" "$2"
+}
 if have faillock; then
-  x=$(faillock 2>/dev/null | awk '/^[^ ].*:$/{u=$1; sub(":","",u); next} / V$/{c[u]++} END{for(k in c) if(c[k]>=3) print k"("c[k]")"}')
-  [ -n "$x" ] && { lk="$lk $x"; lfx="${lfx}sudo faillock --user ИМЯ --reset\n"; }
+  for x in $(faillock 2>/dev/null | awk '/^[^ ].*:$/{u=$1; sub(":","",u); next} / V$/{c[u]++} END{for(k in c) if(c[k]>=3) print k"("c[k]")"}'); do
+    addlock "$x" "faillock --user ${x%%(*} --reset"; done
+  lfx="${lfx}sudo faillock --user ИМЯ --reset\n"
 fi
 if have pam_tally2; then
-  x=$(pam_tally2 2>/dev/null | awk 'NR>1 && $2>=3{print $1"("$2")"}')
-  [ -n "$x" ] && { lk="$lk $x"; lfx="${lfx}sudo pam_tally2 -r -u ИМЯ\n"; }
+  for x in $(pam_tally2 2>/dev/null | awk 'NR>1 && $2>=3{print $1"("$2")"}'); do addlock "$x" "pam_tally2 -r -u ${x%%(*}"; done
+  lfx="${lfx}sudo pam_tally2 -r -u ИМЯ\n"
 fi
 if have faillog; then
-  x=$(faillog -a 2>/dev/null | awk 'NR>1 && $2+0>=3{print $1"("$2")"}')
-  [ -n "$x" ] && { lk="$lk $x"; lfx="${lfx}sudo faillog -r -u ИМЯ\n"; }
+  for x in $(faillog -a 2>/dev/null | awk 'NR>1 && $2+0>=3{print $1"("$2")"}'); do addlock "$x" "faillog -r -u ${x%%(*}"; done
+  lfx="${lfx}sudo faillog -r -u ИМЯ\n"
 fi
 if [ -n "$lk" ]; then
-  bad "Учётки с неудачными попытками входа (могут быть заблокированы):$(echo $lk | sed 's/^/ /')" "Разблокировать пользователя:\n${lfx%\\n}"
+  bad "Учётки с неудачными попытками входа (могут быть заблокированы):$lk" "Разблокировать пользователя:\n${lfx%\\n}"
 else ok "Блокировок по неудачным попыткам входа нет"; fi
 fi
 
@@ -282,9 +313,11 @@ if [ "$dt" = "graphical.target" ]; then
   for d in fly-dm lightdm sddm gdm3; do systemctl is-active --quiet "$d" 2>/dev/null && dm=$d; done
   if [ -n "$dm" ]; then ok "Экран входа работает ($dm)"
   else bad "Менеджер входа fly-dm не запущен — вместо окна входа чёрный экран или консоль" \
-       "sudo systemctl status fly-dm\njournalctl -u fly-dm -b --no-pager | tail -30\nПерезапуск:  sudo systemctl restart fly-dm"; fi
+       "sudo systemctl status fly-dm\njournalctl -u fly-dm -b --no-pager | tail -30\nПерезапуск:  sudo systemctl restart fly-dm"
+       cmd careful "Перезапустить экран входа fly-dm" "systemctl restart fly-dm"; fi
 elif [ "$dt" = "multi-user.target" ]; then
   warn "Система загружается в консоль, без графики" "Вернуть графику:  sudo systemctl set-default graphical.target && sudo reboot"
+  cmd careful "Включить загрузку в графический режим" "systemctl set-default graphical.target"
 fi
 XL=""
 for f in /var/log/Xorg.0.log /var/log/fly-dm/Xorg.0.log; do [ -f "$f" ] && XL=$f && break; done
@@ -293,22 +326,26 @@ if [ -n "$XL" ]; then
   if echo "$ee" | grep -qi 'no screens found'; then
     bad "Xorg: no screens found — графика не стартует (драйвер видеокарты или xorg.conf)" \
         "Если есть /etc/X11/xorg.conf — переименуйте:  sudo mv /etc/X11/xorg.conf /etc/X11/xorg.conf.bak\nПерезапуск:  sudo systemctl restart fly-dm"
+    [ -f /etc/X11/xorg.conf ] && cmd careful "Отключить ручной xorg.conf (переименовать в .bak-astra-helper)" "mv /etc/X11/xorg.conf /etc/X11/xorg.conf.bak-astra-helper"
   elif [ -n "$ee" ]; then
     info "Ошибки Xorg в $XL (часто безвредные):"; echo "$ee" | cut -c1-180 | sed 's/^/       /'
   else ok "Ошибок в журнале Xorg нет"; fi
 fi
 [ -f /etc/X11/xorg.conf ] && warn "Есть ручной /etc/X11/xorg.conf — после замены видеокарты или монитора частая причина чёрного экрана" \
-  "sudo mv /etc/X11/xorg.conf /etc/X11/xorg.conf.bak && sudo systemctl restart fly-dm"
+  "sudo mv /etc/X11/xorg.conf /etc/X11/xorg.conf.bak && sudo systemctl restart fly-dm" \
+  && cmd careful "Отключить ручной xorg.conf (переименовать в .bak-astra-helper)" "mv /etc/X11/xorg.conf /etc/X11/xorg.conf.bak-astra-helper"
 
 while IFS=: read -r u _ uid _ _ home _; do
   [ "$uid" -ge 1000 ] 2>/dev/null && [ "$uid" -lt 60000 ] && [ -d "$home" ] || continue
   own=$(stat -c %U "$home")
-  [ "$own" != "$u" ] && bad "Домашний каталог $home принадлежит $own, а не $u — пользователь не сможет войти" "sudo chown -R $u: $home"
+  [ "$own" != "$u" ] && bad "Домашний каталог $home принадлежит $own, а не $u — пользователь не сможет войти" "sudo chown -R $u: $home" \
+    && cmd careful "Вернуть каталог $home пользователю $u" "chown -R $u: '$home'"
   for f in .Xauthority .ICEauthority; do
     [ -e "$home/$f" ] || continue
     fo=$(stat -c %U "$home/$f")
     [ "$fo" != "$u" ] && bad "$home/$f принадлежит $fo — вход в графику будет сбрасываться на окно входа (бывает после запуска программ через sudo из-под пользователя)" \
-      "sudo rm $home/$f   (создастся заново при входе)"
+      "sudo rm $home/$f   (создастся заново при входе)" \
+      && cmd safe "Удалить $home/$f (создастся заново)" "rm -f '$home/$f'"
   done
 done < /etc/passwd
 fi
@@ -332,7 +369,8 @@ fi
 HNs=$(hostname)
 if grep -v '^[[:space:]]*#' /etc/hosts | grep -qw "$HNs"; then ok "Имя компьютера $HNs есть в /etc/hosts"
 else warn "Имени компьютера $HNs нет в /etc/hosts — sudo долго думает («unable to resolve host»), часть программ сбоит" \
-          "Добавьте в /etc/hosts строку:  127.0.1.1  $HNs\n(в домене лучше реальный IP и полное имя:  IP  $HNs.домен  $HNs)"; fi
+          "Добавьте в /etc/hosts строку:  127.0.1.1  $HNs\n(в домене лучше реальный IP и полное имя:  IP  $HNs.домен  $HNs)"
+     cmd safe "Добавить $HNs в /etc/hosts" "cp /etc/hosts /etc/hosts.bak-astra-helper; printf '127.0.1.1\\t%s\\n' '$HNs' >> /etc/hosts"; fi
 
 if systemctl is-active --quiet NetworkManager 2>/dev/null; then
   ifs=$(grep -hE '^[[:space:]]*iface[[:space:]]' /etc/network/interfaces /etc/network/interfaces.d/* 2>/dev/null | awk '$2!="lo"{print $2}' | sort -u | tr '\n' ' ')
@@ -351,17 +389,20 @@ if want print; then
 hdr "6. Печать"
 if have lpstat; then
   if systemctl is-active --quiet cups 2>/dev/null; then ok "Служба печати CUPS запущена"
-  else bad "Служба печати CUPS не запущена" "sudo systemctl enable cups && sudo systemctl start cups\njournalctl -u cups -b --no-pager | tail -20"; fi
+  else bad "Служба печати CUPS не запущена" "sudo systemctl enable cups && sudo systemctl start cups\njournalctl -u cups -b --no-pager | tail -20"
+       cmd safe "Запустить службу печати CUPS" "systemctl enable cups; systemctl start cups"; fi
   pr=$(lpstat -p 2>/dev/null)
   if [ -z "$pr" ]; then warn "Принтеры не установлены" "Добавьте через Панель управления → Оборудование → Принтеры или http://localhost:631"
   else
     echo "$pr" | sed 's/^/       /'
     for p in $(echo "$pr" | awk '/disabled/{print $2}'); do
       bad "Принтер $p остановлен (disabled) — задания копятся в очереди" "sudo cupsenable $p\nsudo cupsaccept $p"
+      cmd safe "Включить принтер $p" "cupsenable '$p'; cupsaccept '$p'"
     done
   fi
   jobs=$(lpstat -o 2>/dev/null | wc -l)
-  [ "$jobs" -gt 0 ] && warn "В очереди печати висит заданий: $jobs" "Посмотреть:  lpstat -o\nОчистить всё:  sudo cancel -a"
+  [ "$jobs" -gt 0 ] && warn "В очереди печати висит заданий: $jobs" "Посмотреть:  lpstat -o\nОчистить всё:  sudo cancel -a" \
+    && cmd careful "Очистить очередь печати (все задания удалятся)" "cancel -a"
   [ -n "$pr" ] && lpstat -d 2>&1 | grep -qi 'no system default' && warn "Не задан принтер по умолчанию" "sudo lpadmin -d ИМЯ_ПРИНТЕРА"
 else info "CUPS не установлен — пропуск"; fi
 fi
@@ -438,6 +479,9 @@ if [ -n "$LIVE_DC" ]; then
     TFX="Разово:  sudo ntpdate $LIVE_DC\nПостоянно: укажите $LIVE_DC сервером времени (ntp.conf / timesyncd.conf / chrony.conf)"
     if [ "$a" -gt 300 ]; then bad "Время расходится с $LIVE_DC на $off с (больше 5 минут) — Kerberos отказывает" "$TFX"
     elif [ "$a" -gt 60 ]; then warn "Время расходится с $LIVE_DC на $off с" "$TFX"
+    fi
+    [ "$a" -gt 60 ] && have ntpdate && cmd careful "Синхронизировать время с $LIVE_DC" "systemctl stop ntp 2>/dev/null; ntpdate $LIVE_DC; systemctl start ntp 2>/dev/null; true"
+    if [ "$a" -gt 60 ]; then :
     else ok "Время совпадает с $LIVE_DC"; fi
   fi
 fi
@@ -445,11 +489,15 @@ fi
 K=/etc/krb5.conf
 if [ -f $K ]; then
   dr=$(cfg $K default_realm)
-  [ "$dr" = "$REALM" ] && ok "krb5.conf: default_realm = $dr" || bad "krb5.conf: default_realm = '${dr:-не задан}', должно быть $REALM (ЗАГЛАВНЫМИ)" "В /etc/krb5.conf, секция [libdefaults]:\n  default_realm = $REALM\n  dns_lookup_kdc = true"
+  if [ "$dr" = "$REALM" ]; then ok "krb5.conf: default_realm = $dr"
+  else bad "krb5.conf: default_realm = '${dr:-не задан}', должно быть $REALM (ЗАГЛАВНЫМИ)" "В /etc/krb5.conf, секция [libdefaults]:\n  default_realm = $REALM\n  dns_lookup_kdc = true"
+    [ -n "$dr" ] && cmd careful "Исправить default_realm на $REALM в krb5.conf" "cp $K $K.bak-astra-helper; sed -i -E 's/^([[:space:]]*default_realm[[:space:]]*=).*/\\1 $REALM/' $K"
+  fi
   for k in $(awk -F= '/^[[:space:]]*(kdc|admin_server)[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2}' $K | sed 's/:.*//' | sort -u); do
     ip=$(resolve "$k")
     if [ -n "$ip" ] && port "$ip" 88; then ok "krb5.conf: KDC $k отвечает"
-    else bad "krb5.conf: прописан недоступный KDC $k — отсюда «Cannot contact any KDC for realm»" "В /etc/krb5.conf замените $k на живой контроллер${LIVE_DC:+ ($LIVE_DC)}\nили удалите строки kdc/admin_server — тогда KDC найдётся через DNS"; fi
+    else bad "krb5.conf: прописан недоступный KDC $k — отсюда «Cannot contact any KDC for realm»" "В /etc/krb5.conf замените $k на живой контроллер${LIVE_DC:+ ($LIVE_DC)}\nили удалите строки kdc/admin_server — тогда KDC найдётся через DNS"
+      [ -n "$LIVE_DC" ] && cmd careful "Заменить в krb5.conf $k на $LIVE_DC" "cp $K $K.bak-astra-helper; sed -i 's/\\b${k//./\\.}\\b/$LIVE_DC/g' $K"; fi
   done
 else bad "Нет /etc/krb5.conf" "$JOIN"; fi
 SSSCLR="sudo systemctl stop sssd\nsudo rm -f /var/lib/sss/db/* /var/lib/sss/mc/* /var/lib/sss/pubconf/kdcinfo.*\nsudo systemctl start sssd"
@@ -457,38 +505,39 @@ for f in /var/lib/sss/pubconf/kdcinfo.*; do
   [ -f "$f" ] || continue
   for a in $(cat "$f"); do
     a=${a%%:*}
-    port "$a" 88 && ok "Кэш SSSD $(basename "$f"): $a доступен" || bad "Кэш SSSD $(basename "$f") указывает на недоступный KDC $a (старый DC)" "$SSSCLR"
+    port "$a" 88 && ok "Кэш SSSD $(basename "$f"): $a доступен" || { bad "Кэш SSSD $(basename "$f") указывает на недоступный KDC $a (старый DC)" "$SSSCLR"; cmd careful "Очистить кэш SSSD и перезапустить (сбросит сохранённые входы)" "$SSSCLR_CMD"; }
   done
 done
 
 S=/etc/sssd/sssd.conf
 if [ -f $S ]; then
   perm=$(stat -c '%a %U' $S)
-  [ "$perm" = "600 root" ] && ok "Права sssd.conf верные" || bad "Права sssd.conf: $perm — нужно 600 root, иначе sssd не стартует" "sudo chown root:root $S\nsudo chmod 600 $S\nsudo systemctl restart sssd"
+  [ "$perm" = "600 root" ] && ok "Права sssd.conf верные" || { bad "Права sssd.conf: $perm — нужно 600 root, иначе sssd не стартует" "sudo chown root:root $S\nsudo chmod 600 $S\nsudo systemctl restart sssd"; cmd safe "Исправить права sssd.conf" "chown root:root $S; chmod 600 $S; systemctl restart sssd"; }
   grep -qE "^[[:space:]]*\[domain/$DOMAIN\]" $S || bad "В sssd.conf нет секции [domain/$DOMAIN]" "$JOIN"
   for x in $(for key in ad_server ad_backup_server krb5_server ipa_server ldap_uri; do cfg $S $key; done | tr ',' ' '); do
     x=$(echo "$x" | sed -E 's#ldaps?://##; s#:.*##'); [ "$x" = "_srv_" ] && continue
     ip=$(resolve "$x")
     if [ -n "$ip" ] && port "$ip" 389; then ok "sssd.conf: сервер $x доступен"
-    else bad "sssd.conf: прописан недоступный сервер $x" "В $S, секция [domain/$DOMAIN]:\n  ad_server = ${LIVE_DC:-<живой_DC>}   (или _srv_ — искать через DNS)\nзатем очистите кэш:\n$SSSCLR"; fi
+    else bad "sssd.conf: прописан недоступный сервер $x" "В $S, секция [domain/$DOMAIN]:\n  ad_server = ${LIVE_DC:-<живой_DC>}   (или _srv_ — искать через DNS)\nзатем очистите кэш:\n$SSSCLR"
+      [ -n "$LIVE_DC" ] && cmd careful "Заменить в sssd.conf $x на $LIVE_DC и сбросить кэш" "cp $S $S.bak-astra-helper; sed -i 's/\\b${x//./\\.}\\b/$LIVE_DC/g' $S; chmod 600 $S; $SSSCLR_CMD"; fi
   done
 else bad "Нет /etc/sssd/sssd.conf" "$JOIN"; fi
 if systemctl is-active --quiet sssd 2>/dev/null; then ok "Служба sssd запущена"
-else bad "Служба sssd не запущена" "sudo systemctl start sssd\nПричина:  journalctl -u sssd -b --no-pager | tail -30"; fi
+else bad "Служба sssd не запущена" "sudo systemctl start sssd\nПричина:  journalctl -u sssd -b --no-pager | tail -30"; cmd safe "Запустить sssd" "systemctl restart sssd"; fi
 if have sssctl; then
   ds=$(sssctl domain-status "$DOMAIN" 2>&1)
-  echo "$ds" | grep -qi 'Online status: Offline' && bad "SSSD работает в режиме Offline — не может достучаться до контроллера" "После исправления DNS/KDC:\n$SSSCLR\nПроверка:  sudo sssctl domain-status $DOMAIN"
+  echo "$ds" | grep -qi 'Online status: Offline' && { bad "SSSD работает в режиме Offline — не может достучаться до контроллера" "После исправления DNS/KDC:\n$SSSCLR\nПроверка:  sudo sssctl domain-status $DOMAIN"; cmd careful "Очистить кэш SSSD и перезапустить (сбросит сохранённые входы)" "$SSSCLR_CMD"; }
   echo "$ds" | grep -qi 'Online status: Online' && ok "SSSD в режиме Online"
 fi
-grep -qE '^passwd:.*sss' /etc/nsswitch.conf && ok "nsswitch использует sss" || bad "В /etc/nsswitch.conf у passwd нет sss — доменные пользователи не видны" "В /etc/nsswitch.conf:\n  passwd: compat sss\n  group:  compat sss\n  shadow: compat sss"
-grep -qs pam_sss /etc/pam.d/common-auth && ok "PAM: pam_sss подключён" || bad "В PAM не подключён pam_sss — доменные пользователи не войдут" "sudo pam-auth-update   (отметьте SSS authentication)"
+grep -qE '^passwd:.*sss' /etc/nsswitch.conf && ok "nsswitch использует sss" || { bad "В /etc/nsswitch.conf у passwd нет sss — доменные пользователи не видны" "В /etc/nsswitch.conf:\n  passwd: compat sss\n  group:  compat sss\n  shadow: compat sss"; cmd careful "Добавить sss в /etc/nsswitch.conf" "cp /etc/nsswitch.conf /etc/nsswitch.conf.bak-astra-helper; sed -i -E '/^(passwd|group|shadow):/{/sss/!s/\$/ sss/}' /etc/nsswitch.conf"; }
+grep -qs pam_sss /etc/pam.d/common-auth && ok "PAM: pam_sss подключён" || { bad "В PAM не подключён pam_sss — доменные пользователи не войдут" "sudo pam-auth-update   (отметьте SSS authentication)"; cmd careful "Включить SSS в PAM" "pam-auth-update --enable sss"; }
 
 M=/etc/samba/smb.conf
 if [ -f $M ]; then
   for x in $(cfg $M "password server" | tr ',' ' '); do
     [ "$x" = "*" ] && continue
     ip=$(resolve "$x")
-    [ -n "$ip" ] && port "$ip" 445 && ok "smb.conf: password server $x доступен" || bad "smb.conf: password server = $x недоступен" "В $M, секция [global]:  password server = *"
+    [ -n "$ip" ] && port "$ip" 445 && ok "smb.conf: password server $x доступен" || { bad "smb.conf: password server = $x недоступен" "В $M, секция [global]:  password server = *"; cmd careful "Поставить password server = * в smb.conf" "cp $M $M.bak-astra-helper; sed -i -E 's/^([[:space:]]*password server[[:space:]]*=).*/\\1 */I' $M"; }
   done
 fi
 
@@ -510,7 +559,7 @@ if [ -f /etc/krb5.keytab ]; then
   else bad "В /etc/krb5.keytab нет записи $SAM\$@$REALM — keytab от другого имени или домена" "$JOIN"; fi
 else bad "Нет /etc/krb5.keytab — компьютер не введён в домен" "$JOIN"; fi
 if [ -n "$TESTUSER" ]; then
-  r=$(id "$TESTUSER" 2>&1) && ok "Пользователь найден: $r" || bad "Доменный пользователь $TESTUSER не находится" "После исправлений выше:  sudo sss_cache -E  и снова  id $TESTUSER"
+  r=$(id "$TESTUSER" 2>&1) && ok "Пользователь найден: $r" || { bad "Доменный пользователь $TESTUSER не находится" "После исправлений выше:  sudo sss_cache -E  и снова  id $TESTUSER"; cmd safe "Сбросить кэш пользователей SSSD" "sss_cache -E"; }
 fi
 for f in "/var/log/sssd/sssd_$DOMAIN.log" /var/log/sssd/krb5_child.log; do
   [ -f "$f" ] || continue
@@ -525,3 +574,27 @@ hdr "ИТОГ"
 echo "  Ошибок: $E, предупреждений: $W"
 for s in "${SUM[@]}"; do echo "  - $s"; done
 echo "  Полный отчёт: $LOG"
+
+# =====================================================================
+if [ "$FIXMODE" = 1 ]; then
+  hdr "ИСПРАВЛЕНИЕ"
+  if [ ${#FX_CMD[@]} -eq 0 ]; then echo "  Готовых команд исправления нет."
+  else
+    BK=/var/backups/astra-helper/$(date +%Y%m%d-%H%M%S); mkdir -p "$BK"
+    tar czf "$BK/etc-backup.tgz" --ignore-failed-read /etc/apt/sources.list /etc/apt/sources.list.d /etc/krb5.conf \
+      /etc/sssd /etc/samba/smb.conf /etc/nsswitch.conf /etc/hosts /etc/pam.d /etc/X11/xorg.conf /etc/fstab 2>/dev/null
+    echo "  Резервная копия настроек: $BK/etc-backup.tgz"
+    declare -A DONE; REBOOT=""
+    for i in "${!FX_CMD[@]}"; do
+      c="${FX_CMD[$i]}"; [ -n "${DONE[$c]}" ] && continue; DONE[$c]=1
+      [ "$c" = "systemctl reboot" ] && { REBOOT=1; continue; }
+      case "${FX_LVL[$i]}" in safe) l="безопасно" ;; careful) l="осторожно" ;; *) l="МЕНЯЕТ ЗАЩИТУ" ;; esac
+      echo; echo "  [$l] ${FX_TITLE[$i]}"; echo "    # $c"
+      [ "${FX_LVL[$i]}" = danger ] && echo "    !! Меняет средства защиты Astra — только по решению ответственного за ИБ"
+      read -r -p "    Выполнить? [y/N] " ans </dev/tty
+      case "$ans" in y|Y|yes|д|Д|да|Да) bash -c "$c"; echo "    → код возврата $?" ;; *) echo "    пропущено" ;; esac
+    done
+    if [ -n "$REBOOT" ]; then read -r -p "  Перезагрузить компьютер сейчас? [y/N] " ans </dev/tty; case "$ans" in y|Y|д|Д|да) systemctl reboot ;; esac; fi
+    echo; echo "  Готово. Запустите проверку ещё раз, чтобы убедиться, что всё исправлено."
+  fi
+fi
