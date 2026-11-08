@@ -8,12 +8,13 @@ DST=/opt/astra-helper
 
 echo "== Копирую файлы в $DST"
 mkdir -p "$DST"
-cp -f "$SRC/astra-helper" "$SRC/astra-fixer" "$SRC/astra_helper_gui.py" "$SRC/astra_fixer_gui.py" "$SRC/astra-doctor.sh" "$SRC/uninstall.sh" "$DST/"
+# убрать остатки версии 1.1 (отдельный Astra Fixer)
+rm -f "$DST/astra-fixer" "$DST/astra_fixer_gui.py" "$DST/astra-fixer.svg" /usr/local/bin/astra-fixer /usr/share/applications/astra-fixer.desktop
+cp -f "$SRC/astra-helper" "$SRC/astra_helper_gui.py" "$SRC/astra-doctor.sh" "$SRC/uninstall.sh" "$DST/"
 cp -f "$SRC"/*.svg "$DST/" 2>/dev/null || true
-chmod 755 "$DST/astra-helper" "$DST/astra-fixer" "$DST/astra-doctor.sh" "$DST/uninstall.sh"
-chmod 644 "$DST/astra_helper_gui.py" "$DST/astra_fixer_gui.py"
+chmod 755 "$DST/astra-helper" "$DST/astra-doctor.sh" "$DST/uninstall.sh"
+chmod 644 "$DST/astra_helper_gui.py"
 ln -sf "$DST/astra-helper" /usr/local/bin/astra-helper
-ln -sf "$DST/astra-fixer" /usr/local/bin/astra-fixer
 
 echo "== Зависимости"
 set +e
@@ -35,27 +36,16 @@ cat > /usr/share/applications/astra-helper.desktop <<EOF
 [Desktop Entry]
 Type=Application
 Name=Astra Linux Helper
-Name[ru]=Astra Helper — диагностика
-Comment=Проверка типичных проблем Astra Linux и советы по исправлению
+Name[ru]=Astra Helper — диагностика и исправление
+Comment=Проверка и исправление типичных проблем Astra Linux
 Exec=$DST/astra-helper
 Icon=$( [ -f "$DST/astra-helper.svg" ] && echo "$DST/astra-helper.svg" || echo utilities-system-monitor )
 Terminal=false
 Categories=System;Settings;
 EOF
-cat > /usr/share/applications/astra-fixer.desktop <<EOF
-[Desktop Entry]
-Type=Application
-Name=Astra Fixer
-Name[ru]=Astra Fixer — исправление
-Comment=Исправление типичных проблем Astra Linux готовыми командами
-Exec=$DST/astra-fixer
-Icon=$DST/astra-fixer.svg
-Terminal=false
-Categories=System;Settings;
-EOF
-chmod 644 /usr/share/applications/astra-helper.desktop /usr/share/applications/astra-fixer.desktop
+chmod 644 /usr/share/applications/astra-helper.desktop
 
 echo
-echo "Готово. Меню «Пуск» → Системные → Astra Helper (диагностика) и Astra Fixer (исправление)"
-echo "В терминале:  astra-helper  /  astra-fixer   (без графики: --text)"
+echo "Готово. Меню «Пуск» → Системные → Astra Helper"
+echo "В терминале:  astra-helper   (без графики: astra-helper --text, исправление в терминале: astra-helper --fix)"
 echo "Удаление:  sudo $DST/uninstall.sh"

@@ -1,14 +1,13 @@
 #!/bin/bash
 # Astra Linux Helper / Astra Fixer — запуск. При первом запуске сам доставит python3-tk
 # из штатных репозиториев Astra; если не получится — запустит проверки в терминале.
-#   astra-helper  — окно диагностики     astra-helper --text — то же в терминале
-#   astra-fixer   — окно исправления     astra-fixer --text  — исправление в терминале (y/N на каждую команду)
+#   astra-helper          — окно: проверка и исправление
+#   astra-helper --text   — проверки в терминале (без графики)
+#   astra-helper --fix    — проверки и исправление в терминале (y/N на каждую команду)
 
 DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 DOC="$DIR/astra-doctor.sh"
-if [ "${ASTRA_MODE:-helper}" = "fixer" ]; then GUI="$DIR/astra_fixer_gui.py"; FIXARG="--fix"
-else GUI="$DIR/astra_helper_gui.py"; FIXARG=""; fi
-export ASTRA_MODE
+GUI="$DIR/astra_helper_gui.py"; FIXARG=""
 
 text_mode() {
   shift_args=("$@")
@@ -35,6 +34,7 @@ install_tk() {
 }
 
 if [ "$1" = "--text" ]; then shift; text_mode "$@"; exit; fi
+if [ "$1" = "--fix" ]; then shift; FIXARG="--fix"; text_mode "$@"; exit; fi
 
 if ! command -v python3 >/dev/null 2>&1; then
   [ -t 0 ] || in_terminal --text
