@@ -10,9 +10,9 @@ echo "== Копирую файлы в $DST"
 mkdir -p "$DST"
 # убрать остатки версии 1.1 (отдельный Astra Fixer)
 rm -f "$DST/astra-fixer" "$DST/astra_fixer_gui.py" "$DST/astra-fixer.svg" /usr/local/bin/astra-fixer /usr/share/applications/astra-fixer.desktop
-cp -f "$SRC/astra-helper" "$SRC/astra_helper_gui.py" "$SRC/astra-doctor.sh" "$SRC/uninstall.sh" "$DST/"
+cp -f "$SRC/astra-helper" "$SRC/astra-domain.sh" "$SRC/astra_helper_gui.py" "$SRC/astra-doctor.sh" "$SRC/uninstall.sh" "$DST/"
 cp -f "$SRC"/*.svg "$DST/" 2>/dev/null || true
-chmod 755 "$DST/astra-helper" "$DST/astra-doctor.sh" "$DST/uninstall.sh"
+chmod 755 "$DST/astra-helper" "$DST/astra-doctor.sh" "$DST/astra-domain.sh" "$DST/uninstall.sh"
 chmod 644 "$DST/astra_helper_gui.py"
 ln -sf "$DST/astra-helper" /usr/local/bin/astra-helper
 

@@ -7,7 +7,7 @@ VER=$(grep -E '^VERSION *=' astra_helper_gui.py | cut -d'"' -f2)
 B=$(mktemp -d)
 P="$B/astra-helper"
 mkdir -p "$P/DEBIAN" "$P/opt/astra-helper" "$P/usr/bin" "$P/usr/share/applications"
-install -m 755 astra-helper astra-doctor.sh "$P/opt/astra-helper/"
+install -m 755 astra-helper astra-doctor.sh astra-domain.sh "$P/opt/astra-helper/"
 install -m 644 astra_helper_gui.py astra-helper.svg README.md "$P/opt/astra-helper/"
 ln -s /opt/astra-helper/astra-helper "$P/usr/bin/astra-helper"
 cat > "$P/usr/share/applications/astra-helper.desktop" <<EOF
