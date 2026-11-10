@@ -4,7 +4,7 @@
 #
 # Запуск:  sudo bash astra-doctor.sh [--only sys,apt,sec,gui,net,print,sound,ad] [--domain домен] [--user пользователь]
 #          --fix   — после проверки по очереди предложить выполнить команды исправления (y/N)
-#          --cmds  — выводить команды исправления в машинном виде (для Astra Fixer)
+#          --cmds  — выводить команды исправления в машинном виде (для графического окна)
 # Отчёт:   /tmp/astra-doctor-ДАТА.log
 
 ONLY=""; DOMAIN=""; TESTUSER=""; FIXMODE=0; CMDS_ON=0
@@ -44,6 +44,7 @@ srcsed() { # команда: закомментировать deb-строки �
   printf "for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do [ -f \"\$f\" ] && sed -i.bak-astra-helper -E '\\#^[[:space:]]*deb.*(%s)#s/^/# /' \"\$f\"; done; apt-get update" "$1"
 }
 SSSCLR_CMD="systemctl stop sssd; rm -f /var/lib/sss/db/* /var/lib/sss/mc/* /var/lib/sss/pubconf/kdcinfo.*; systemctl start sssd"
+SELF_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 want()   { [ -z "$ONLY" ] || [[ ",$ONLY," == *",$1,"* ]]; }
 have()   { command -v "$1" >/dev/null 2>&1; }
 port()   { timeout 3 bash -c "</dev/tcp/$1/$2" 2>/dev/null; }
@@ -430,9 +431,7 @@ if [ -z "$DOMAIN" ]; then
 else
 DOMAIN=$(echo "$DOMAIN" | tr 'A-Z' 'a-z'); REALM=$(echo "$DOMAIN" | tr 'a-z' 'A-Z')
 sysi "Домен: $DOMAIN"
-if [ "$V" = 1.6 ]; then JOIN="sudo realm leave $DOMAIN\nsudo realm join -U <админ_домена> --membership-software=samba --client-software=sssd $DOMAIN"
-else JOIN="sudo realm leave $DOMAIN\nШтатно для Astra ${V:-1.7+}:  sudo astra-ad-sssd-client -d $DOMAIN -u <админ_домена>\nили:  sudo realm join -U <админ_домена> $DOMAIN"; fi
-JOIN="Сначала исправьте DNS, доступность DC и время, затем введите компьютер заново:\n$JOIN\nЕсли в AD осталась старая учётка этого компьютера — удалите её перед вводом"
+JOIN="Вкладка «Домен»: «Найти контроллеры» → отметьте ближайший → «Проверка перед вводом» → «Ввести в домен».\nБез графики:  sudo astra-helper --domain\nЕсли в AD осталась старая учётка этого компьютера — попросите администратора домена удалить её"
 HN=$(hostname -s); FQDN=$(hostname -f 2>/dev/null)
 [ ${#HN} -gt 15 ] && bad "Имя '$HN' длиннее 15 символов — AD обрежет его, учётка компьютера не совпадёт с keytab" "Сократите имя:  sudo hostnamectl set-hostname КОРОТКОЕ_ИМЯ\nпоправьте /etc/hosts и введите компьютер в домен заново"
 case "$FQDN" in
@@ -446,26 +445,29 @@ for s in $(awk '/^nameserver/{print $2}' /etc/resolv.conf); do
 done
 ip=$(resolve "$DOMAIN"); [ -n "$ip" ] && ok "$DOMAIN → $ip" || bad "Имя домена $DOMAIN не резолвится — указан не тот DNS" "$DNSFIX"
 if ! have dig && ! have host && ! have nslookup; then warn "Нет dig/host/nslookup — SRV-записи не проверить" "sudo apt-get install dnsutils"; fi
-DCS=""
-for rec in _ldap._tcp _kerberos._tcp _kerberos._udp; do
-  r=$(srv "$rec.$DOMAIN")
-  if [ -n "$r" ]; then ok "SRV $rec → $(echo $r)"; DCS="$DCS $r"
-  else bad "SRV-запись $rec.$DOMAIN не найдена — Kerberos и SSSD не найдут контроллер" "$DNSFIX"; fi
+for rec in _ldap._tcp _kerberos._tcp; do
+  r=$(srv "$rec.$DOMAIN" | wc -l)
+  [ "$r" -gt 0 ] && ok "SRV $rec: записей $r" || bad "SRV-запись $rec.$DOMAIN не найдена — Kerberos и SSSD не найдут контроллер" "$DNSFIX"
 done
-DCS=$(echo $DCS | tr ' ' '\n' | sort -u)
-DEADFIX="На живом контроллере (Windows Server):\n1) Диспетчер DNS → зоны $DOMAIN и _msdcs.$DOMAIN: удалите A- и SRV-записи упавшего сервера (папки _tcp, _udp, _sites, dc, gc, pdc)\n2) Очистите метаданные: ntdsutil → metadata cleanup (или удалите DC в «AD — пользователи и компьютеры» → Domain Controllers)\n3) Если упавший DC держал роли FSMO — захватите их на новый: ntdsutil → roles → seize"
-LIVE_DC=""
-for dc in $DCS; do
-  ip=$(resolve "$dc")
-  [ -z "$ip" ] && { bad "$dc есть в SRV, но не резолвится — мёртвая запись в DNS" "$DEADFIX"; continue; }
-  open=""; closed=""
-  for p in 53 88 389 445 464; do port "$ip" $p && open="$open $p" || closed="$closed $p"; done
-  if [ -z "$open" ]; then bad "Контроллер $dc ($ip) не отвечает ни по одному порту — похоже, упавший DC остался в DNS" "$DEADFIX"
-  elif echo " $closed " | grep -qE ' (88|389) '; then bad "$dc ($ip): закрыты ключевые порты$closed" "Откройте на DC и межсетевом экране порты 53, 88, 135, 389, 445, 464, 636, 3268"
-  else [ -n "$closed" ] && warn "$dc ($ip): закрыты порты$closed" || ok "Контроллер $dc ($ip) доступен"; [ -z "$LIVE_DC" ] && LIVE_DC=$dc; fi
-done
-[ -n "$DCS" ] && [ -z "$LIVE_DC" ] && bad "Ни один контроллер домена не доступен" "$DEADFIX"
-[ -n "$LIVE_DC" ] && sysi "Живой контроллер: $LIVE_DC"
+# Контроллеры: доступность, отклик и сайт AD — общий сканер (параллельно, чтобы не ждать мёртвые)
+SCAN=$(bash "$SELF_DIR/astra-domain.sh" scan --domain "$DOMAIN" 2>/dev/null | sed -n 's/^\[DC\] //p')
+DCS=$(echo "$SCAN" | cut -d'|' -f1)
+MYSITE=$(echo "$SCAN" | awk -F'|' '$7!=""{c[$7]++} END{m=0; s=""; for(k in c) if(c[k]>m){m=c[k]; s=k} print s}')
+NDC=$(echo "$SCAN" | grep -c .)
+SORTED=$(echo "$SCAN" | awk -F'|' -v s="$MYSITE" '$3=="ok"{print (($9 ~ /cfg/)?0:1) "|" ((s!="" && $6==s)?0:1) "|" $4+0 "|" $1 "|" $6}' | sort -t'|' -k1,1n -k2,2n -k3,3n)
+NLIVE=$(echo "$SORTED" | grep -c .)
+LIVE_DC=$(echo "$SORTED" | head -1 | cut -d'|' -f4)
+DEAD=$(echo "$SCAN" | awk -F'|' '$3=="dead"||$3=="nodns"{printf "%s%s", (n++?", ":""), $1 ($2!=""?" ("$2")":" (нет в DNS)")}')
+PART=$(echo "$SCAN" | awk -F'|' '$3=="partial"{printf "%s%s (закрыты порты %s)", (n++?", ":""), $1, $5}')
+[ -n "$MYSITE" ] && sysi "Сайт AD: $MYSITE"
+if [ "$NDC" -eq 0 ]; then :
+elif [ "$NLIVE" -eq 0 ]; then
+  bad "Ни один из $NDC контроллеров домена не доступен" "Проверьте сеть, маршрут до контроллеров и межсетевой экран (порты 88, 389, 464)\nНе отвечают: $DEAD"
+else
+  ok "Контроллеров домена в DNS: $NDC, доступно: $NLIVE. Ближайшие: $(echo "$SORTED" | awk -F'|' -v s="$MYSITE" 'NR<=3{printf "%s%s (%s мс%s)", (NR>1?", ":""), $4, $3, ((s!="" && $5==s)?", ваш сайт AD":"")}')"
+  [ -n "$DEAD$PART" ] && warn "Не отвечают $((NDC-NLIVE)) из $NDC контроллеров домена — если ввод в домен или SSSD случайно выберут такой, будет ошибка" "Привяжите компьютер к доступному ближнему контроллеру: вкладка «Домен» → выберите контроллер (он пропишется в sssd.conf как ad_server).\nНе отвечают: ${DEAD:-нет}${PART:+\nДоступны частично: $PART}\nЭтот список стоит передать администраторам домена: мёртвые записи убираются из DNS и AD (metadata cleanup)."
+fi
+[ -n "$LIVE_DC" ] && sysi "Ближайший контроллер: $LIVE_DC"
 
 if [ -n "$LIVE_DC" ]; then
   off=""

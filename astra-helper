@@ -4,6 +4,7 @@
 #   astra-helper          — окно: проверка и исправление
 #   astra-helper --text   — проверки в терминале (без графики)
 #   astra-helper --fix    — проверки и исправление в терминале (y/N на каждую команду)
+#   astra-helper --domain — ввод в домен в терминале: выбор контроллера, проверка, ввод
 
 DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 DOC="$DIR/astra-doctor.sh"
@@ -35,6 +36,11 @@ install_tk() {
 
 if [ "$1" = "--text" ]; then shift; text_mode "$@"; exit; fi
 if [ "$1" = "--fix" ]; then shift; FIXARG="--fix"; text_mode "$@"; exit; fi
+if [ "$1" = "--domain" ]; then
+  shift; D=""; [ -n "$1" ] && D="--domain $1"
+  if [ "$(id -u)" -eq 0 ]; then bash "$DIR/astra-domain.sh" wizard $D; else sudo bash "$DIR/astra-domain.sh" wizard $D; fi
+  echo; read -r -p "Нажмите Enter, чтобы закрыть..." _; exit
+fi
 
 if ! command -v python3 >/dev/null 2>&1; then
   [ -t 0 ] || in_terminal --text
