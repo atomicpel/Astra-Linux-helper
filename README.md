@@ -37,7 +37,10 @@
 - **видеонаблюдение** на IP-камерах (RTSP);
 - удалённая поддержка и разовые выезды, субподряд для интеграторов.
 
-**Нужна помощь с Astra Linux или сетью?** Напишите через [Issues](https://github.com/atomicpel/Astra-Linux-helper/issues) или профиль GitHub [@atomicpel](https://github.com/atomicpel). Опишите задачу и количество машин, отвечу с оценкой сроков.
+**Нужна помощь с Astra Linux или сетью?** Опишите задачу и количество машин, отвечу с оценкой сроков:
+
+- Telegram: [@atomicpel6939](https://t.me/atomicpel6939)
+- Почта: [atomicpel12@gmail.com](mailto:atomicpel12@gmail.com)
 
 ## Возможности подробно
 
