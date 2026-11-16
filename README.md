@@ -42,6 +42,10 @@
 - Telegram: [@atomicpel6939](https://t.me/atomicpel6939)
 - Почта: [atomicpel12@gmail.com](mailto:atomicpel12@gmail.com)
 
+## Уроки по Astra Linux
+
+Хотите разобраться сами? Провожу личные онлайн-уроки на вашей машине: ввод в домен AD, SSSD и Kerberos, работа без интернета. Есть мини-курс из 5 уроков «Astra Linux в домене AD». Напишите в Telegram [@atomicpel6939](https://t.me/atomicpel6939).
+
 ## Возможности подробно
 
 Одна программа и диагностирует, и исправляет:
